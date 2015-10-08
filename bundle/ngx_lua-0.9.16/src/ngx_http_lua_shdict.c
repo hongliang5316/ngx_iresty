@@ -298,7 +298,7 @@ ngx_http_lua_inject_shdict_api(ngx_http_lua_main_conf_t *lmcf, lua_State *L)
         lua_createtable(L, 0, lmcf->shm_zones->nelts /* nrec */);
                 /* ngx.shared */
 
-        lua_createtable(L, 0 /* narr */, 13 /* nrec */); /* shared mt */
+        lua_createtable(L, 0 /* narr */, 15 /* nrec */); /* shared mt */
 
         lua_pushcfunction(L, ngx_http_lua_shdict_get);
         lua_setfield(L, -2, "get");
@@ -329,6 +329,12 @@ ngx_http_lua_inject_shdict_api(ngx_http_lua_main_conf_t *lmcf, lua_State *L)
 
         lua_pushcfunction(L, ngx_http_lua_shdict_flush_all);
         lua_setfield(L, -2, "flush_all");
+
+        lua_pushcfunction(L, ngx_http_lua_shdict_news);
+        lua_setfield(L, -2, "news");
+
+        lua_pushcfunction(L, ngx_http_lua_shdict_get_and_flush_expires);
+        lua_setfield(L, -2, "get_and_flush_expires");
 
         lua_pushcfunction(L, ngx_http_lua_shdict_flush_expired);
         lua_setfield(L, -2, "flush_expired");
@@ -982,6 +988,10 @@ replace:
             ngx_queue_remove(&sd->queue);
             ngx_queue_insert_head(&ctx->sh->queue, &sd->queue);
 
+            tp = ngx_timeofday();
+
+            sd->updates = (uint64_t) tp->sec * 1000 + tp->msec; 
+
             sd->key_len = (u_short) key.len;
 
             if (exptime > 0) {
@@ -1090,6 +1100,8 @@ insert:
 allocated:
 
     sd = (ngx_http_lua_shdict_node_t *) &node->color;
+
+    sd->new_flag = 1;
 
     node->key = hash;
     sd->key_len = (u_short) key.len;

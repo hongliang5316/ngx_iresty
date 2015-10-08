@@ -16,7 +16,8 @@ typedef struct {
     u_char                       dummy;
     u_short                      key_len;
     ngx_queue_t                  queue;
-    uint64_t                     expires;
+    u_char                       new_flag;       // 更新时间
+    uint64_t                     expires;       // 过期时间
     uint8_t                      value_type;
     uint32_t                     value_len;
     uint32_t                     user_flags;
