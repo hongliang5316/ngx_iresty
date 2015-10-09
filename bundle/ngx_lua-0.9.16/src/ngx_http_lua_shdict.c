@@ -34,7 +34,8 @@ static int ngx_http_lua_shdict_delete(lua_State *L);
 static int ngx_http_lua_shdict_flush_all(lua_State *L);
 static int ngx_http_lua_shdict_flush_expired(lua_State *L);
 static int ngx_http_lua_shdict_get_keys(lua_State *L);
-
+static int ngx_http_lua_shdict_news(lua_State *L);
+static int ngx_http_lua_shdict_get_and_flush_expires(lua_State *L);
 
 #define NGX_HTTP_LUA_SHDICT_ADD         0x0001
 #define NGX_HTTP_LUA_SHDICT_REPLACE     0x0002
@@ -562,6 +563,176 @@ ngx_http_lua_shdict_delete(lua_State *L)
     return ngx_http_lua_shdict_set_helper(L, 0);
 }
 
+static int
+ngx_http_lua_shdict_news(lua_State *L)
+{
+    ngx_queue_t                   *tail, *prev;
+    ngx_http_lua_shdict_node_t    *sd;
+    ngx_http_lua_shdict_ctx_t     *ctx;
+    ngx_time_t                    *tp;
+    ngx_shm_zone_t                *zone;
+    uint64_t                       now;
+    int                            total = 0;
+    int                            n;
+
+    n = lua_gettop(L);
+
+    if (n != 1) {
+        return luaL_error(L, "expecting only but at least 1 argument, but saw %d", n);
+    }
+
+    luaL_checktype(L, 1, LUA_TLIGHTUSERDATA);
+
+    zone = lua_touserdata(L, 1);
+
+    if (zone == NULL) {
+        return luaL_error(L, "bad user data");
+    }
+
+    ctx = zone->data;
+
+    ngx_shmtx_lock(&ctx->shpool->mutex);
+
+
+    if (ngx_queue_empty(&ctx->sh->queue)) {
+        ngx_shmtx_unlock(&ctx->shpool->mutex);
+        lua_pushnumber(L, 0);
+        return 1;
+    }
+
+    tp = ngx_timeofday();
+
+    now = (uint64_t) tp->sec * 1000 + tp->msec;
+
+    /* first run through: get total number of elements we need to allocate */
+
+    tail = ngx_queue_last(&ctx->sh->queue);
+
+    while (tail != ngx_queue_sentinel(&ctx->sh->queue)) {
+        prev = ngx_queue_prev(tail);
+
+        sd = ngx_queue_data(tail, ngx_http_lua_shdict_node_t, queue);
+
+        if ((sd->expires == 0 && sd->new_flag == 1)  // 未设置超时时间
+            || (sd->expires != 0 && sd->expires > now && sd->new_flag == 1)) {  // 设置了超时时间但未超时
+            total++;
+        }
+
+        tail = prev;
+    }
+
+    lua_createtable(L, total, 0);
+
+    total = 0;
+    tail = ngx_queue_last(&ctx->sh->queue);
+
+    while (tail != ngx_queue_sentinel(&ctx->sh->queue)) {
+        prev = ngx_queue_prev(tail);
+
+        sd = ngx_queue_data(tail, ngx_http_lua_shdict_node_t, queue);
+
+        if ((sd->expires == 0 && sd->new_flag == 1)  // 未设置超时时间
+            || (sd->expires != 0 && sd->expires > now && sd->new_flag == 1)) {  // 设置了超时时间但未超时
+            sd->new_flag = 0;
+            lua_pushlstring(L, (char *) sd->data, sd->key_len);
+            lua_rawseti(L, -2, ++total);
+        }
+        tail = prev;
+    }
+
+    ngx_shmtx_unlock(&ctx->shpool->mutex);
+
+    return 1;
+}
+
+static int
+ngx_http_lua_shdict_get_and_flush_expires(lua_State *L)
+{
+    ngx_queue_t                   *tail, *prev;
+    ngx_http_lua_shdict_node_t    *sd;
+    ngx_http_lua_shdict_ctx_t     *ctx;
+    ngx_time_t                    *tp;
+    ngx_rbtree_node_t             *node;
+    ngx_shm_zone_t                *zone;
+    uint64_t                       now;
+    int                            total = 0;
+    int                            n;
+
+    n = lua_gettop(L);
+
+    if (n != 1) {
+        return luaL_error(L, "expecting only but at least 1 argument, but saw %d", n);
+    }
+
+    luaL_checktype(L, 1, LUA_TLIGHTUSERDATA);
+
+    zone = lua_touserdata(L, 1);
+
+    if (zone == NULL) {
+        return luaL_error(L, "bad user data");
+    }
+
+    ctx = zone->data;
+
+    ngx_shmtx_lock(&ctx->shpool->mutex);
+
+
+    if (ngx_queue_empty(&ctx->sh->queue)) {
+        ngx_shmtx_unlock(&ctx->shpool->mutex);
+        lua_pushnumber(L, 0);
+        return 1;
+    }
+
+    tp = ngx_timeofday();
+
+    now = (uint64_t) tp->sec * 1000 + tp->msec;
+
+    /* first run through: get total number of elements we need to allocate */
+
+    tail = ngx_queue_last(&ctx->sh->queue);
+
+    while (tail != ngx_queue_sentinel(&ctx->sh->queue)) {
+        prev = ngx_queue_prev(tail);
+
+        sd = ngx_queue_data(tail, ngx_http_lua_shdict_node_t, queue);
+
+        if ((sd->expires == 0 && sd->new_flag == 1)  // 未设置超时时间
+            || (sd->expires != 0 && sd->expires > now && sd->new_flag == 1)) {  // 设置了超时时间但未超时
+            total++;
+        }
+
+        tail = prev;
+    }
+
+    lua_createtable(L, total, 0);
+
+    total = 0;
+    tail = ngx_queue_last(&ctx->sh->queue);
+
+    while (tail != ngx_queue_sentinel(&ctx->sh->queue)) {
+        prev = ngx_queue_prev(tail);
+
+        sd = ngx_queue_data(tail, ngx_http_lua_shdict_node_t, queue);
+
+        if ((sd->expires != 0 && sd->expires <= now)) {  //  超时
+            lua_pushlstring(L, (char *) sd->data, sd->key_len);
+            lua_rawseti(L, -2, ++total);
+
+            ngx_queue_remove(tail);
+            node = (ngx_rbtree_node_t *)
+                ((u_char *) sd - offsetof(ngx_rbtree_node_t, color));
+
+            ngx_rbtree_delete(&ctx->sh->rbtree, node);
+            ngx_slab_free_locked(ctx->shpool, node);
+        }
+        tail = prev;
+    }
+
+    ngx_shmtx_unlock(&ctx->shpool->mutex);
+
+    return 1;
+}
+
 
 static int
 ngx_http_lua_shdict_flush_all(lua_State *L)
@@ -989,8 +1160,6 @@ replace:
             ngx_queue_insert_head(&ctx->sh->queue, &sd->queue);
 
             tp = ngx_timeofday();
-
-            sd->updates = (uint64_t) tp->sec * 1000 + tp->msec; 
 
             sd->key_len = (u_short) key.len;
 
