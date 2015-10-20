@@ -139,6 +139,7 @@ struct ngx_http_lua_main_conf_s {
 #endif
 
     ngx_array_t         *shm_zones;  /* of ngx_shm_zone_t* */
+    ngx_array_t         *shm_zones_of_list; /* of ngx_shm_zone_list_t* */
 
     ngx_array_t         *preload_hooks; /* of ngx_http_lua_preload_hook_t */
 
@@ -152,6 +153,7 @@ struct ngx_http_lua_main_conf_s {
     ngx_str_t                       init_worker_src;
 
     ngx_uint_t                      shm_zones_inited;
+    ngx_uint_t                      shm_zones_of_list_inited;
 
     unsigned             requires_header_filter:1;
     unsigned             requires_body_filter:1;

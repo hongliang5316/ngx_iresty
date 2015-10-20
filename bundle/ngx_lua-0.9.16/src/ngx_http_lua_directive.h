@@ -11,6 +11,7 @@
 
 #include "ngx_http_lua_common.h"
 
+char *ngx_http_lua_shared_list(ngx_conf_t *cf, ngx_command_t *cmd, void * conf);
 
 char *ngx_http_lua_shared_dict(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
 char *ngx_http_lua_package_cpath(ngx_conf_t *cf, ngx_command_t *cmd,
