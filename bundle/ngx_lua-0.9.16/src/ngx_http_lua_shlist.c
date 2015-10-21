@@ -1,6 +1,6 @@
 
 #ifndef DDEBUG
-#define DDEBUG 0
+#define DDEBUG 1
 #endif
 #include "ddebug.h"
 
@@ -23,6 +23,8 @@ ngx_http_lua_shlist_init_zone(ngx_shm_zone_t *shm_zone, void *data)
     size_t                         len;
     ngx_http_lua_shlist_ctx_t     *ctx;
     ngx_http_lua_main_conf_t      *lmcf;
+
+    dd("init shlist zone");
 
     ctx = shm_zone->data;
 
@@ -57,7 +59,7 @@ ngx_http_lua_shlist_init_zone(ngx_shm_zone_t *shm_zone, void *data)
         return NGX_ERROR;
     }
 
-    ngx_sprintf(ctx->shpool->log_ctx, " in lua_shared_dict zone \"%V\"%Z",
+    ngx_sprintf(ctx->shpool->log_ctx, " in lua_shared_list zone \"%V\"%Z",
                 &shm_zone->shm.name);
 
 #if defined(nginx_version) && nginx_version >= 1005013
@@ -166,6 +168,7 @@ int ngx_http_lua_shlist_push(lua_State *L)
     }
 
     value_type = lua_type(L, 2);  // 第二个参数就是要入栈的
+    // dd("value_type: %n", &value_type);
 
     switch (value_type) {
         case LUA_TSTRING:
@@ -177,11 +180,9 @@ int ngx_http_lua_shlist_push(lua_State *L)
             value.data = (u_char *) &num;
             break;
         case LUA_TNIL:
-            if (1) {
-                lua_pushnil(L);
-                lua_pushliteral(L, "attempt to add nil to list");
-                return 2;
-            }
+            lua_pushnil(L);
+            lua_pushliteral(L, "attempt to add nil to list");
+            return 2;
         default:
             lua_pushnil(L);
             lua_pushliteral(L, "bad value type");
@@ -190,10 +191,10 @@ int ngx_http_lua_shlist_push(lua_State *L)
 
     ngx_shmtx_lock(&ctx->shpool->mutex);
 
-    n = offsetof(ngx_http_lua_shlist_node_t, data)
+    n = offsetof(ngx_http_lua_shlist_node_t, data)  // 计算足够大小的空间
         + value.len;
 
-    node = ngx_slab_alloc_locked(ctx->shpool, n);
+    node = ngx_slab_alloc_locked(ctx->shpool, n);   // 申请
 
     if (node == NULL) {
         ngx_shmtx_unlock(&ctx->shpool->mutex);
@@ -202,8 +203,11 @@ int ngx_http_lua_shlist_push(lua_State *L)
         lua_pushliteral(L, "no memory");
         return 2;
     }
-    
+
+    node->value_len  = (uint32_t) value.len;
     node->value_type = (uint8_t) value_type;
+
+    ngx_memcpy(node->data, value.data, value.len);
 
     ngx_queue_insert_tail(&ctx->sh->queue, &node->queue);
 
@@ -235,7 +239,7 @@ int ngx_http_lua_shlist_pop(lua_State *L)
     zone = lua_touserdata(L, 1);
 
     if (zone == NULL) {
-        return luaL_error(L, "bad zone argument");
+        return luaL_error(L, "bad \"zone\" argument");
     }
 
     ctx = zone->data;
@@ -252,7 +256,14 @@ int ngx_http_lua_shlist_pop(lua_State *L)
 
     node = ngx_queue_data(head, ngx_http_lua_shlist_node_t, queue);
 
+    ngx_queue_remove(head);
+
+    dd("data:%p", node->data);
+    dd("data len: %d", (int) node->value_len);
+
     value_type = node->value_type;
+    value.data = node->data;
+    value.len = (size_t) node->value_len;
 
     switch(value_type) {
         case LUA_TSTRING:
@@ -260,17 +271,19 @@ int ngx_http_lua_shlist_pop(lua_State *L)
             break;
         case LUA_TNUMBER:
             if (value.len != sizeof(double)) {
+                ngx_slab_free_locked(ctx->shpool, node);
                 ngx_shmtx_unlock(&ctx->shpool->mutex);
-
                 return luaL_error(L, "bad lua number value size found");
             }
             ngx_memcpy(&num, value.data, sizeof(double));
             lua_pushnumber(L, num);
             break;
         default:
+            ngx_slab_free_locked(ctx->shpool, node);
             ngx_shmtx_unlock(&ctx->shpool->mutex);
             return luaL_error(L, "bad value type found");
     }
+    ngx_slab_free_locked(ctx->shpool, node);
     ngx_shmtx_unlock(&ctx->shpool->mutex);
 
     return 1;

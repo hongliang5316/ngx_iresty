@@ -99,7 +99,7 @@ ngx_http_lua_shared_list(ngx_conf_t *cf, ngx_command_t *cmd, void * conf)
         ctx = zone->data;
 
         ngx_conf_log_error(NGX_LOG_EMERG, cf, 0,
-                           "lua_shared_dict \"%V\" is already defined as "
+                           "lua_shared_list \"%V\" is already defined as "
                            "\"%V\"", &name, &ctx->name);
         return NGX_CONF_ERROR;
     }
