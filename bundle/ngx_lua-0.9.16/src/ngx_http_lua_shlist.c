@@ -1,6 +1,6 @@
 
 #ifndef DDEBUG
-#define DDEBUG 1
+#define DDEBUG 0
 #endif
 #include "ddebug.h"
 
@@ -14,6 +14,12 @@ static int ngx_http_lua_shlist_pop(lua_State *L);
 static int ngx_http_lua_shlist_push(lua_State *L);
 // static int ngx_http_lua_shlist_size(lua_State *L);
 // static int ngx_http_lua_shlist_clear(lua_State *L);
+
+static ngx_inline ngx_shm_zone_t *ngx_http_lua_shlist_get_zone(lua_State *L, int index);
+
+enum {
+    SHLIST_USERDATA_INDEX = 1,
+};
 
 ngx_int_t
 ngx_http_lua_shlist_init_zone(ngx_shm_zone_t *shm_zone, void *data)
@@ -123,8 +129,10 @@ ngx_http_lua_inject_shlist_api(ngx_http_lua_main_conf_t *lmcf, lua_State *L)
             ctx = zone[i]->data;
 
             lua_pushlstring(L, (char* )ctx->name.data, ctx->name.len);
+            lua_createtable(L, 1 /* narr */, 0 /* nrec */); /* table of zone[i] */
 
             lua_pushlightuserdata(L, zone[i]);
+            lua_rawseti(L, -2, SHLIST_USERDATA_INDEX);
             lua_pushvalue(L, -3);
             lua_setmetatable(L, -2);
             lua_rawset(L, -4);
@@ -136,6 +144,18 @@ ngx_http_lua_inject_shlist_api(ngx_http_lua_main_conf_t *lmcf, lua_State *L)
     }
 
     lua_setfield(L, -2, "list");
+}
+
+static ngx_inline ngx_shm_zone_t *
+ngx_http_lua_shlist_get_zone(lua_State *L, int index)
+{
+    ngx_shm_zone_t      *zone;
+
+    lua_rawgeti(L, index, SHLIST_USERDATA_INDEX);
+    zone = lua_touserdata(L, -1);
+    lua_pop(L, 1);
+
+    return zone;
 }
 
 static
@@ -155,7 +175,12 @@ int ngx_http_lua_shlist_push(lua_State *L)
         return luaL_error(L, "expecting 2 arguments, but seen %d", n);
     }
 
-    zone = lua_touserdata(L, 1);
+    if (lua_type(L, 1) != LUA_TTABLE) {
+        return luaL_error(L, "bad \"temp table zone\" argument");
+    }
+
+    
+    zone = ngx_http_lua_shlist_get_zone(L, 1);
     if (zone == NULL) {
         return luaL_error(L, "bad \"zone\" argument");
     }
@@ -236,8 +261,11 @@ int ngx_http_lua_shlist_pop(lua_State *L)
         return luaL_error(L, "expecting only but one argument");
     }
 
-    zone = lua_touserdata(L, 1);
+    if (lua_type(L, 1) != LUA_TTABLE) {
+        return luaL_error(L, "bad \"temp table zone\" argument");
+    }
 
+    zone = ngx_http_lua_shlist_get_zone(L, 1);
     if (zone == NULL) {
         return luaL_error(L, "bad \"zone\" argument");
     }
